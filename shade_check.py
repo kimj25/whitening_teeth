@@ -150,6 +150,7 @@ def main():
 
         if input("Upload another image? (y/n): ").lower() != 'y':
             break
+            print("new branch test")
 
 
 if __name__ == "__main__":
