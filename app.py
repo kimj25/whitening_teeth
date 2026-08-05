@@ -1,5 +1,6 @@
 import datetime
 import os
+from io import BytesIO
 from typing import Optional, Tuple
 
 import streamlit as st
@@ -42,6 +43,63 @@ def get_vision_client() -> Optional[vision.ImageAnnotatorClient]:
         return vision.ImageAnnotatorClient(credentials=credentials)
     except Exception as e:
         st.error(f"Error initializing Google Cloud Vision: {e}")
+        return None
+
+
+MOUTH_LANDMARKS = ("MOUTH_LEFT", "MOUTH_RIGHT", "UPPER_LIP_TOP", "LOWER_LIP_BOTTOM")
+
+
+def crop_to_mouth(
+    image_bytes: bytes, client: vision.ImageAnnotatorClient
+) -> Optional[bytes]:
+    """Crop the image to the mouth region using Vision face landmarks."""
+    try:
+        image = vision.Image(content=image_bytes)
+        response = client.face_detection(image=image)
+
+        if response.error.message:
+            st.error(f"API Error: {response.error.message}")
+            return None
+        if not response.face_annotations:
+            st.warning("No face detected; analyzing the full image")
+            return None
+
+        landmarks = {
+            lnd.type_.name: lnd.position
+            for lnd in response.face_annotations[0].landmarks
+        }
+        missing = [key for key in MOUTH_LANDMARKS if key not in landmarks]
+        if missing:
+            st.warning(
+                f"Missing mouth landmarks ({', '.join(missing)}); "
+                "analyzing the full image"
+            )
+            return None
+
+        img = Image.open(BytesIO(image_bytes))
+        width, height = img.size
+
+        x0 = min(landmarks["MOUTH_LEFT"].x, landmarks["MOUTH_RIGHT"].x) * width
+        x1 = max(landmarks["MOUTH_LEFT"].x, landmarks["MOUTH_RIGHT"].x) * width
+        y0 = min(landmarks["UPPER_LIP_TOP"].y, landmarks["LOWER_LIP_BOTTOM"].y) * height
+        y1 = max(landmarks["UPPER_LIP_TOP"].y, landmarks["LOWER_LIP_BOTTOM"].y) * height
+
+        pad_x = (x1 - x0) * 0.05
+        pad_y = (y1 - y0) * 0.05
+        x0, x1 = max(0, int(x0 - pad_x)), min(width, int(x1 + pad_x))
+        y0, y1 = max(0, int(y0 - pad_y)), min(height, int(y1 + pad_y))
+
+        if x1 - x0 < 10 or y1 - y0 < 10:
+            st.warning("Mouth region too small; analyzing the full image")
+            return None
+
+        crop = img.crop((x0, y0, x1, y1))
+        buf = BytesIO()
+        crop.save(buf, format="JPEG")
+        return buf.getvalue()
+
+    except Exception as e:
+        st.error(f"Error cropping mouth: {e}")
         return None
 
 
@@ -133,7 +191,10 @@ def main():
 
         if st.button("🔍 Analyze Shade", type="primary"):
             with st.spinner("Analyzing tooth shade..."):
-                shade = analyze_tooth_shade(uploaded_file.getvalue(), client)
+                region_bytes = crop_to_mouth(uploaded_file.getvalue(), client)
+                shade = analyze_tooth_shade(
+                    region_bytes or uploaded_file.getvalue(), client
+                )
                 record = {
                     "date": datetime.date.today().isoformat(),
                     "shade": shade,
@@ -143,6 +204,9 @@ def main():
 
                 with col2:
                     st.subheader("🎨 Analysis Results")
+                    if region_bytes is not None:
+                        st.markdown("**Analyzed Region:**")
+                        st.image(region_bytes, width=200)
                     st.markdown(f"**Shade (RGB):** {shade[0]}, {shade[1]}, {shade[2]}")
                     st.markdown(f"**Brightness:** {record['brightness']:.2f}")
                     st.markdown("**Dominant Color:**")
