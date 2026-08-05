@@ -25,6 +25,7 @@ if "upload_dir" not in st.session_state:
 
 def get_vision_client() -> Optional[vision.ImageAnnotatorClient]:
     """Initialize the Google Cloud Vision client."""
+    credentials = None
     try:
         # Streamlit Cloud: credentials come from Secrets
         if "gcp_service_account" in st.secrets:
@@ -33,9 +34,12 @@ def get_vision_client() -> Optional[vision.ImageAnnotatorClient]:
             credentials = service_account.Credentials.from_service_account_info(
                 st.secrets["gcp_service_account"]
             )
-            return vision.ImageAnnotatorClient(credentials=credentials)
+    except Exception:
+        pass  # No secrets file; fall back to GOOGLE_APPLICATION_CREDENTIALS
+
+    try:
         # Local development: GOOGLE_APPLICATION_CREDENTIALS
-        return vision.ImageAnnotatorClient()
+        return vision.ImageAnnotatorClient(credentials=credentials)
     except Exception as e:
         st.error(f"Error initializing Google Cloud Vision: {e}")
         return None
